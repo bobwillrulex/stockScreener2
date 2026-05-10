@@ -32,14 +32,19 @@ class ScanStorageTests(unittest.TestCase):
             self.assertTrue(database_path.exists())
             self.assertFalse(persisted.previous_database_found)
             self.assertEqual(persisted.new_tickers, [])
+            self.assertEqual(persisted.new_results, [])
             self.assertIn("No previous database found", persisted.message)
 
             with sqlite3.connect(database_path) as connection:
                 run_count = connection.execute("SELECT COUNT(*) FROM scan_runs").fetchone()[0]
                 result_count = connection.execute("SELECT COUNT(*) FROM scan_results").fetchone()[0]
+                new_ticker_count = connection.execute(
+                    "SELECT COUNT(*) FROM scan_new_tickers"
+                ).fetchone()[0]
 
         self.assertEqual(run_count, 1)
         self.assertEqual(result_count, 2)
+        self.assertEqual(new_ticker_count, 0)
 
     def test_next_scan_reports_only_tickers_not_in_previous_scan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -53,6 +58,7 @@ class ScanStorageTests(unittest.TestCase):
 
             self.assertTrue(persisted.previous_database_found)
             self.assertEqual(persisted.new_tickers, ["NVDA"])
+            self.assertEqual([row["ticker"] for row in persisted.new_results], ["NVDA"])
             self.assertIn("Found 1 new ticker", persisted.message)
 
             with sqlite3.connect(database_path) as connection:
@@ -64,8 +70,16 @@ class ScanStorageTests(unittest.TestCase):
                         (latest_run_id,),
                     ).fetchall()
                 ]
+                latest_new_tickers = [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT ticker FROM scan_new_tickers WHERE run_id = ? ORDER BY id",
+                        (latest_run_id,),
+                    ).fetchall()
+                ]
 
         self.assertEqual(latest_tickers, ["MSFT", "NVDA", "AAPL"])
+        self.assertEqual(latest_new_tickers, ["NVDA"])
 
     def test_next_scan_reports_empty_list_when_no_tickers_are_new(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -76,6 +90,7 @@ class ScanStorageTests(unittest.TestCase):
 
         self.assertTrue(persisted.previous_database_found)
         self.assertEqual(persisted.new_tickers, [])
+        self.assertEqual(persisted.new_results, [])
         self.assertIn("No new tickers found", persisted.message)
 
 

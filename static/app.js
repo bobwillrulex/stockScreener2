@@ -6,7 +6,8 @@ const resultsBody = document.getElementById('results-body');
 const resultCount = document.getElementById('result-count');
 const databaseStatus = document.getElementById('database-status');
 const newTickerCount = document.getElementById('new-ticker-count');
-const newTickers = document.getElementById('new-tickers');
+const tableTitle = document.getElementById('table-title');
+const viewButtons = document.querySelectorAll('[data-result-view]');
 const sortButtons = document.querySelectorAll('[data-sort-key]');
 
 const columnTypes = {
@@ -21,7 +22,14 @@ const columnTypes = {
   last_price: 'number',
 };
 
+const emptyMessages = {
+  signals: 'No matching signals found.',
+  new: 'No new tickers found compared with the previous scan.',
+};
+
 let currentResults = [];
+let currentNewTickerResults = [];
+let currentView = 'signals';
 let currentSort = { key: 'market_cap', direction: 'desc' };
 
 function formatNumber(value, digits = 4) {
@@ -121,13 +129,31 @@ function updateSortIndicators() {
   });
 }
 
-function renderRows(results) {
+function activeResults() {
+  return currentView === 'new' ? currentNewTickerResults : currentResults;
+}
+
+function updateViewButtons() {
+  viewButtons.forEach((button) => {
+    const isActive = button.dataset.resultView === currentView;
+    button.classList.toggle('btn-primary', isActive);
+    button.classList.toggle('btn-outline-primary', !isActive);
+    button.setAttribute('aria-pressed', String(isActive));
+  });
+}
+
+function renderRows(results = activeResults()) {
   const sortedResults = sortResults(results);
-  resultCount.textContent = `${sortedResults.length} result${sortedResults.length === 1 ? '' : 's'}`;
+  const isNewTickerView = currentView === 'new';
+  const itemLabel = isNewTickerView ? 'new ticker' : 'result';
+
+  tableTitle.textContent = isNewTickerView ? 'New Tickers' : 'Signals';
+  resultCount.textContent = `${sortedResults.length} ${itemLabel}${sortedResults.length === 1 ? '' : 's'}`;
   updateSortIndicators();
+  updateViewButtons();
 
   if (sortedResults.length === 0) {
-    resultsBody.innerHTML = '<tr><td colspan="9" class="text-center text-secondary py-4">No matching signals found.</td></tr>';
+    resultsBody.innerHTML = `<tr><td colspan="9" class="text-center text-secondary py-4">${emptyMessages[currentView]}</td></tr>`;
     return;
   }
 
@@ -148,24 +174,18 @@ function renderRows(results) {
 
 function renderScanDatabase(scanDatabase) {
   if (!scanDatabase) {
+    currentNewTickerResults = [];
     databaseStatus.textContent = 'Scan database status was not returned.';
     newTickerCount.textContent = '0 new tickers';
-    newTickers.innerHTML = '';
+    renderRows();
     return;
   }
 
+  currentNewTickerResults = scanDatabase.new_results || [];
   const tickers = scanDatabase.new_tickers || [];
   databaseStatus.textContent = scanDatabase.message || 'Scan database updated.';
   newTickerCount.textContent = `${tickers.length} new ticker${tickers.length === 1 ? '' : 's'}`;
-
-  if (tickers.length === 0) {
-    newTickers.innerHTML = '<span class="text-secondary">No new tickers to show.</span>';
-    return;
-  }
-
-  newTickers.innerHTML = tickers
-    .map((ticker) => `<span class="badge text-bg-info">${escapeHtml(ticker)}</span>`)
-    .join('');
+  renderRows();
 }
 
 function handleSortClick(event) {
@@ -174,7 +194,12 @@ function handleSortClick(event) {
     key: nextKey,
     direction: currentSort.key === nextKey && currentSort.direction === 'asc' ? 'desc' : 'asc',
   };
-  renderRows(currentResults);
+  renderRows();
+}
+
+function handleViewClick(event) {
+  currentView = event.currentTarget.dataset.resultView;
+  renderRows();
 }
 
 async function runScan() {
@@ -196,15 +221,14 @@ async function runScan() {
     const payload = await response.json();
     currentResults = payload.results || [];
     currentSort = { key: 'market_cap', direction: 'desc' };
-    renderRows(currentResults);
     renderScanDatabase(payload.scan_database);
     statusText.textContent = `Completed at ${new Date().toLocaleTimeString()}.`;
   } catch (error) {
     currentResults = [];
+    currentNewTickerResults = [];
     resultsBody.innerHTML = `<tr><td colspan="9" class="text-danger text-center py-4">${escapeHtml(error.message)}</td></tr>`;
     databaseStatus.textContent = 'Scan database was not updated.';
     newTickerCount.textContent = '0 new tickers';
-    newTickers.innerHTML = '';
     statusText.textContent = 'Scan failed.';
   } finally {
     spinner.classList.add('d-none');
@@ -213,5 +237,6 @@ async function runScan() {
 }
 
 sortButtons.forEach((button) => button.addEventListener('click', handleSortClick));
+viewButtons.forEach((button) => button.addEventListener('click', handleViewClick));
 runButton.addEventListener('click', runScan);
-updateSortIndicators();
+renderRows();
