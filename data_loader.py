@@ -17,7 +17,13 @@ import yfinance as yf
 LOGGER = logging.getLogger(__name__)
 
 T = TypeVar("T")
-YFINANCE_REQUEST_DELAY_SECONDS = float(os.getenv("YFINANCE_REQUEST_DELAY_SECONDS", "0.25"))
+YFINANCE_REQUEST_DELAY_SECONDS = float(os.getenv("YFINANCE_REQUEST_DELAY_SECONDS", "1.0"))
+YFINANCE_EARNINGS_ENABLED = os.getenv("YFINANCE_EARNINGS_ENABLED", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 _LAST_YFINANCE_REQUEST_AT = 0.0
 _YFINANCE_REQUEST_LOCK = threading.Lock()
 
@@ -208,8 +214,28 @@ def load_ohlcv(ticker: str, period: str = "2y", max_age_hours: int = 6) -> pd.Da
     return data
 
 
+def _mock_earnings_dates_from_bars(bars: pd.DataFrame | None = None) -> list[pd.Timestamp]:
+    """Create quarterly earnings-anchor dates without contacting a remote provider."""
+    if bars is None or bars.empty:
+        start = pd.Timestamp.utcnow().tz_localize(None) - pd.DateOffset(years=2)
+        end = pd.Timestamp.utcnow().tz_localize(None)
+    else:
+        start = pd.Timestamp(bars.index.min()).tz_localize(None)
+        end = pd.Timestamp(bars.index.max()).tz_localize(None)
+    return list(pd.date_range(start=start, end=end, freq="QS"))
+
+
 def load_earnings_dates(ticker: str, bars: pd.DataFrame | None = None) -> list[pd.Timestamp]:
-    """Load earnings dates, mocking quarterly anchors if provider data is unavailable."""
+    """Load earnings-anchor dates.
+
+    The default path intentionally avoids yfinance's earnings endpoint because it is
+    prone to aggressive rate limiting during broad Russell 1000 scans. Set
+    ``YFINANCE_EARNINGS_ENABLED=true`` to opt back into provider earnings dates;
+    otherwise quarterly anchors are generated from the available bar range.
+    """
+    if not YFINANCE_EARNINGS_ENABLED:
+        return _mock_earnings_dates_from_bars(bars)
+
     symbol = ticker.replace(".", "-")
     try:
         earnings = _call_yfinance_with_delay(lambda: yf.Ticker(symbol).get_earnings_dates(limit=24))
@@ -218,12 +244,6 @@ def load_earnings_dates(ticker: str, bars: pd.DataFrame | None = None) -> list[p
             index = index[~pd.isna(index)]
             return [pd.Timestamp(value).tz_localize(None) for value in index]
     except Exception as exc:  # noqa: BLE001 - yfinance earnings are often unavailable
-        LOGGER.info("Using mocked earnings dates for %s: %s", ticker, exc)
+        LOGGER.info("Using generated quarterly earnings anchors for %s: %s", ticker, exc)
 
-    if bars is None or bars.empty:
-        start = pd.Timestamp.utcnow().tz_localize(None) - pd.DateOffset(years=2)
-        end = pd.Timestamp.utcnow().tz_localize(None)
-    else:
-        start = pd.Timestamp(bars.index.min()).tz_localize(None)
-        end = pd.Timestamp(bars.index.max()).tz_localize(None)
-    return list(pd.date_range(start=start, end=end, freq="QS"))
+    return _mock_earnings_dates_from_bars(bars)

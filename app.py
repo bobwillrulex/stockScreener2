@@ -25,7 +25,7 @@ def scan():
     """Run the screener and return JSON results."""
     payload = request.get_json(silent=True) or {}
     threshold = float(payload.get("threshold", 0.1))
-    max_workers = int(payload.get("max_workers", os.getenv("SCAN_WORKERS", "12")))
+    max_workers = int(payload.get("max_workers", os.getenv("SCAN_WORKERS", "4")))
     results = run_scan(threshold=threshold, max_workers=max_workers)
     return jsonify({"results": results})
 
