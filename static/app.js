@@ -4,6 +4,9 @@ const statusText = document.getElementById('scan-status');
 const thresholdInput = document.getElementById('threshold');
 const resultsBody = document.getElementById('results-body');
 const resultCount = document.getElementById('result-count');
+const databaseStatus = document.getElementById('database-status');
+const newTickerCount = document.getElementById('new-ticker-count');
+const newTickers = document.getElementById('new-tickers');
 const sortButtons = document.querySelectorAll('[data-sort-key]');
 
 const columnTypes = {
@@ -143,6 +146,28 @@ function renderRows(results) {
   `).join('');
 }
 
+function renderScanDatabase(scanDatabase) {
+  if (!scanDatabase) {
+    databaseStatus.textContent = 'Scan database status was not returned.';
+    newTickerCount.textContent = '0 new tickers';
+    newTickers.innerHTML = '';
+    return;
+  }
+
+  const tickers = scanDatabase.new_tickers || [];
+  databaseStatus.textContent = scanDatabase.message || 'Scan database updated.';
+  newTickerCount.textContent = `${tickers.length} new ticker${tickers.length === 1 ? '' : 's'}`;
+
+  if (tickers.length === 0) {
+    newTickers.innerHTML = '<span class="text-secondary">No new tickers to show.</span>';
+    return;
+  }
+
+  newTickers.innerHTML = tickers
+    .map((ticker) => `<span class="badge text-bg-info">${escapeHtml(ticker)}</span>`)
+    .join('');
+}
+
 function handleSortClick(event) {
   const nextKey = event.currentTarget.dataset.sortKey;
   currentSort = {
@@ -172,10 +197,14 @@ async function runScan() {
     currentResults = payload.results || [];
     currentSort = { key: 'market_cap', direction: 'desc' };
     renderRows(currentResults);
+    renderScanDatabase(payload.scan_database);
     statusText.textContent = `Completed at ${new Date().toLocaleTimeString()}.`;
   } catch (error) {
     currentResults = [];
     resultsBody.innerHTML = `<tr><td colspan="9" class="text-danger text-center py-4">${escapeHtml(error.message)}</td></tr>`;
+    databaseStatus.textContent = 'Scan database was not updated.';
+    newTickerCount.textContent = '0 new tickers';
+    newTickers.innerHTML = '';
     statusText.textContent = 'Scan failed.';
   } finally {
     spinner.classList.add('d-none');

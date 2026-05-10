@@ -8,6 +8,7 @@ import os
 from flask import Flask, jsonify, render_template, request
 
 from screener import run_scan
+from scan_storage import persist_scan_results
 
 logging.basicConfig(level=logging.INFO)
 
@@ -27,7 +28,8 @@ def scan():
     threshold = float(payload.get("threshold", 0.1))
     max_workers = int(payload.get("max_workers", os.getenv("SCAN_WORKERS", "4")))
     results = run_scan(threshold=threshold, max_workers=max_workers)
-    return jsonify({"results": results})
+    persisted_scan = persist_scan_results(results)
+    return jsonify({"results": results, "scan_database": persisted_scan.as_dict()})
 
 
 if __name__ == "__main__":
