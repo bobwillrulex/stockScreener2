@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import logging
+import os
+import threading
+import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import TypeVar
 
 import pandas as pd
 import yfinance as yf
 
 LOGGER = logging.getLogger(__name__)
+
+T = TypeVar("T")
+YFINANCE_REQUEST_DELAY_SECONDS = float(os.getenv("YFINANCE_REQUEST_DELAY_SECONDS", "0.25"))
+_LAST_YFINANCE_REQUEST_AT = 0.0
+_YFINANCE_REQUEST_LOCK = threading.Lock()
 
 BASE_DIR = Path(__file__).resolve().parent
 RUSSELL_CACHE = BASE_DIR / "russell1000.csv"
@@ -127,6 +137,20 @@ def _write_cached_bars(ticker: str, interval: str, frame: pd.DataFrame) -> None:
         LOGGER.warning("Unable to write cache for %s: %s", ticker, exc)
 
 
+def _call_yfinance_with_delay(operation: Callable[[], T]) -> T:
+    """Run a yfinance request after a small global delay to reduce rate limits."""
+    global _LAST_YFINANCE_REQUEST_AT
+
+    with _YFINANCE_REQUEST_LOCK:
+        elapsed = time.monotonic() - _LAST_YFINANCE_REQUEST_AT
+        sleep_for = YFINANCE_REQUEST_DELAY_SECONDS - elapsed
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+        _LAST_YFINANCE_REQUEST_AT = time.monotonic()
+
+    return operation()
+
+
 def load_ohlcv(ticker: str, period: str = "2y", max_age_hours: int = 6) -> pd.DataFrame:
     """Load OHLCV bars and return 4-hour candles.
 
@@ -139,24 +163,28 @@ def load_ohlcv(ticker: str, period: str = "2y", max_age_hours: int = 6) -> pd.Da
         return cached
 
     symbol = ticker.replace(".", "-")
-    hourly = yf.download(
-        symbol,
-        period=period,
-        interval="60m",
-        auto_adjust=False,
-        progress=False,
-        threads=False,
+    hourly = _call_yfinance_with_delay(
+        lambda: yf.download(
+            symbol,
+            period=period,
+            interval="60m",
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+        )
     )
     data = _flatten_yfinance_columns(hourly)
 
     if data.empty:
-        daily = yf.download(
-            symbol,
-            period=period,
-            interval="1d",
-            auto_adjust=False,
-            progress=False,
-            threads=False,
+        daily = _call_yfinance_with_delay(
+            lambda: yf.download(
+                symbol,
+                period=period,
+                interval="1d",
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+            )
         )
         data = _flatten_yfinance_columns(daily)
 
@@ -184,7 +212,7 @@ def load_earnings_dates(ticker: str, bars: pd.DataFrame | None = None) -> list[p
     """Load earnings dates, mocking quarterly anchors if provider data is unavailable."""
     symbol = ticker.replace(".", "-")
     try:
-        earnings = yf.Ticker(symbol).get_earnings_dates(limit=24)
+        earnings = _call_yfinance_with_delay(lambda: yf.Ticker(symbol).get_earnings_dates(limit=24))
         if earnings is not None and not earnings.empty:
             index = pd.to_datetime(earnings.index, errors="coerce")
             index = index[~pd.isna(index)]
