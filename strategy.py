@@ -14,6 +14,8 @@ class SignalResult:
     """Screener result for one ticker."""
 
     ticker: str
+    company_name: str | None
+    market_cap: int | None
     near_earnings: bool
     near_yearly: bool
     min_distance_earnings: float | None
@@ -34,6 +36,8 @@ class SignalResult:
         """Return a JSON-serializable representation."""
         return {
             "ticker": self.ticker,
+            "company_name": self.company_name,
+            "market_cap": self.market_cap,
             "near_earnings": self.near_earnings,
             "near_yearly": self.near_yearly,
             "min_distance_earnings": self.min_distance_earnings,
@@ -127,6 +131,8 @@ def evaluate_ticker(
     bars: pd.DataFrame,
     earnings_dates: Iterable[pd.Timestamp],
     threshold: float = 0.1,
+    company_name: str | None = None,
+    market_cap: int | None = None,
 ) -> SignalResult | None:
     """Evaluate latest candle against earnings and yearly anchored VWAP signals."""
     if bars is None or bars.empty:
@@ -155,6 +161,8 @@ def evaluate_ticker(
 
     return SignalResult(
         ticker=ticker,
+        company_name=company_name,
+        market_cap=market_cap,
         near_earnings=near_earnings,
         near_yearly=near_yearly,
         min_distance_earnings=earnings_value,

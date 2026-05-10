@@ -41,18 +41,20 @@
           <table class="table table-striped table-hover mb-0 align-middle">
             <thead>
               <tr>
-                <th>Ticker</th>
-                <th>Near Earnings VWAP</th>
-                <th>Near Yearly VWAP</th>
-                <th>Distance Score</th>
-                <th>Earnings Distance</th>
-                <th>Yearly Distance</th>
-                <th>Last Price</th>
+                <th scope="col"><button class="btn btn-link p-0 fw-semibold text-decoration-none text-body" type="button" data-sort-key="ticker">Ticker <span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th scope="col"><button class="btn btn-link p-0 fw-semibold text-decoration-none text-body" type="button" data-sort-key="company_name">Company <span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th scope="col"><button class="btn btn-link p-0 fw-semibold text-decoration-none text-body" type="button" data-sort-key="market_cap">Market Cap <span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th scope="col"><button class="btn btn-link p-0 fw-semibold text-decoration-none text-body" type="button" data-sort-key="near_earnings">Near Earnings VWAP <span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th scope="col"><button class="btn btn-link p-0 fw-semibold text-decoration-none text-body" type="button" data-sort-key="near_yearly">Near Yearly VWAP <span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th scope="col"><button class="btn btn-link p-0 fw-semibold text-decoration-none text-body" type="button" data-sort-key="distance_score">Distance Score <span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th scope="col"><button class="btn btn-link p-0 fw-semibold text-decoration-none text-body" type="button" data-sort-key="min_distance_earnings">Earnings Distance <span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th scope="col"><button class="btn btn-link p-0 fw-semibold text-decoration-none text-body" type="button" data-sort-key="min_distance_yearly">Yearly Distance <span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th scope="col"><button class="btn btn-link p-0 fw-semibold text-decoration-none text-body" type="button" data-sort-key="last_price">Last Price <span class="sort-indicator" aria-hidden="true"></span></button></th>
               </tr>
             </thead>
             <tbody id="results-body">
               <tr>
-                <td colspan="7" class="text-center text-secondary py-4">Click “Run Scan” to begin.</td>
+                <td colspan="9" class="text-center text-secondary py-4">Click “Run Scan” to begin.</td>
               </tr>
             </tbody>
           </table>
