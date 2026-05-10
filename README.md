@@ -5,7 +5,7 @@ A Flask dashboard that scans Russell 1000 constituents for stocks currently trad
 ## Features
 
 - Single-page Flask UI with a **Run Scan** button, loading spinner, and ranked results table.
-- Russell 1000 ticker cache in `russell1000.csv`; the app fetches constituents when the cache is empty or missing.
+- Russell 1000 ticker cache in `russell1000.csv`; the app fetches constituents from the iShares Russell 1000 ETF holdings CSV when the cache is empty, missing, stale, or from an untrusted legacy source.
 - yfinance OHLCV downloads, resampled to 4-hour candles when intraday data is available.
 - Earnings-anchored and calendar-year anchored VWAP calculations using HLC3 and cumulative volume weighting.
 - Generated quarterly earnings anchors by default to avoid rate-limited yfinance earnings calls during broad scans.
