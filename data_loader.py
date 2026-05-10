@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import os
+import re
 import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TypeVar
+from urllib.request import Request, urlopen
 
 import pandas as pd
 import yfinance as yf
@@ -30,14 +33,20 @@ _YFINANCE_REQUEST_LOCK = threading.Lock()
 BASE_DIR = Path(__file__).resolve().parent
 RUSSELL_CACHE = BASE_DIR / "russell1000.csv"
 DATA_CACHE_DIR = BASE_DIR / "data_cache"
-WIKIPEDIA_URLS = (
-    "https://en.wikipedia.org/wiki/Russell_1000_Index",
-    "https://en.wikipedia.org/wiki/Russell_1000",
-)
+TRUSTED_RUSSELL_SOURCES = {"ishares"}
+RUSSELL_MIN_TICKERS = 900
+TICKER_PATTERN = re.compile(r"^[A-Z]{1,5}(?:-[A-Z]{1,2})?$")
 ISHARES_HOLDINGS_URL = (
     "https://www.ishares.com/us/products/239707/ishares-russell-1000-etf/"
     "1467271812596.ajax?fileType=csv&fileName=IWB_holdings&dataType=fund"
 )
+ISHARES_REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": "text/csv,application/csv,text/plain,*/*",
+}
 
 
 def _normalize_ticker(ticker: object) -> str | None:
@@ -46,66 +55,84 @@ def _normalize_ticker(ticker: object) -> str | None:
     value = str(ticker).strip().upper().replace(".", "-")
     if not value or value in {"NAN", "CASH", "--", "-"}:
         return None
+    if not TICKER_PATTERN.fullmatch(value):
+        return None
     return value
 
 
-def _extract_tickers_from_tables(tables: list[pd.DataFrame]) -> list[str]:
-    candidates: list[str] = []
-    ticker_column_names = {"ticker", "symbol", "ticker symbol", "stock symbol"}
-    for table in tables:
-        normalized_columns = {str(col).strip().lower(): col for col in table.columns}
-        selected_column = None
-        for column_name, original_column in normalized_columns.items():
-            if column_name in ticker_column_names or "ticker" in column_name or "symbol" in column_name:
-                selected_column = original_column
-                break
-        if selected_column is None:
-            continue
-        candidates.extend(table[selected_column].map(_normalize_ticker).dropna().tolist())
-    return sorted(dict.fromkeys(candidates))
+def _download_ishares_holdings_csv() -> str:
+    request = Request(ISHARES_HOLDINGS_URL, headers=ISHARES_REQUEST_HEADERS)
+    with urlopen(request, timeout=30) as response:  # noqa: S310 - fixed trusted HTTPS URL
+        return response.read().decode("utf-8-sig")
 
 
-def _fetch_tickers_from_wikipedia() -> list[str]:
-    for url in WIKIPEDIA_URLS:
-        try:
-            tables = pd.read_html(url)
-        except Exception as exc:  # noqa: BLE001 - keep fallback path resilient
-            LOGGER.warning("Unable to read Russell 1000 tickers from %s: %s", url, exc)
-            continue
-        tickers = _extract_tickers_from_tables(tables)
-        if len(tickers) >= 900:
-            LOGGER.info("Loaded %s Russell 1000 tickers from %s", len(tickers), url)
-            return tickers[:1000]
-        if tickers:
-            LOGGER.warning("Only found %s candidate tickers at %s", len(tickers), url)
-    return []
+def _read_ishares_holdings() -> pd.DataFrame:
+    csv_text = _download_ishares_holdings_csv()
+    lines = csv_text.splitlines()
+    header_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.strip().lower().startswith("ticker,") or ",ticker," in line.strip().lower()
+        ),
+        None,
+    )
+    if header_index is None:
+        raise RuntimeError("Unable to locate Ticker header in iShares holdings CSV")
+    return pd.read_csv(io.StringIO("\n".join(lines[header_index:])))
 
 
 def _fetch_tickers_from_ishares() -> list[str]:
-    raw = pd.read_csv(ISHARES_HOLDINGS_URL, skiprows=9)
-    symbol_column = "Ticker" if "Ticker" in raw.columns else raw.columns[0]
+    """Fetch Russell 1000 tickers from the iShares IWB holdings CSV."""
+    raw = _read_ishares_holdings()
+    normalized_columns = {str(column).strip().lower(): column for column in raw.columns}
+    symbol_column = normalized_columns.get("ticker")
+    if symbol_column is None:
+        raise RuntimeError("iShares holdings CSV does not contain a Ticker column")
     tickers = raw[symbol_column].map(_normalize_ticker).dropna().tolist()
-    return sorted(dict.fromkeys(tickers))[:1000]
+    return sorted(dict.fromkeys(tickers))
+
+
+def _load_cached_russell_tickers() -> list[str]:
+    frame = pd.read_csv(RUSSELL_CACHE)
+    if "ticker" not in frame.columns:
+        return []
+
+    cached_tickers = frame["ticker"].map(_normalize_ticker).dropna().tolist()
+    if len(cached_tickers) < RUSSELL_MIN_TICKERS:
+        LOGGER.warning(
+            "Ignoring Russell 1000 cache with only %s valid tickers; refreshing from iShares.",
+            len(cached_tickers),
+        )
+        return []
+
+    if "source" not in frame.columns:
+        LOGGER.warning("Ignoring Russell 1000 cache without source metadata; refreshing from iShares.")
+        return []
+
+    sources = {str(source).strip().lower() for source in frame["source"].dropna().unique()}
+    if not sources <= TRUSTED_RUSSELL_SOURCES:
+        LOGGER.warning(
+            "Ignoring Russell 1000 cache from untrusted source(s) %s; refreshing from iShares.",
+            ", ".join(sorted(sources)) or "unknown",
+        )
+        return []
+
+    return cached_tickers
 
 
 def load_russell1000_tickers(force_refresh: bool = False) -> list[str]:
     """Load Russell 1000 tickers, creating the local CSV cache if needed."""
     if RUSSELL_CACHE.exists() and not force_refresh:
-        frame = pd.read_csv(RUSSELL_CACHE)
-        cached_tickers = frame["ticker"].map(_normalize_ticker).dropna().tolist()
+        cached_tickers = _load_cached_russell_tickers()
         if cached_tickers:
             return cached_tickers
 
-    tickers = _fetch_tickers_from_wikipedia()
-    source = "wikipedia"
-    if len(tickers) < 900:
-        tickers = _fetch_tickers_from_ishares()
-        source = "ishares"
+    tickers = _fetch_tickers_from_ishares()
+    if len(tickers) < RUSSELL_MIN_TICKERS:
+        raise RuntimeError(f"Only loaded {len(tickers)} Russell 1000 tickers from iShares")
 
-    if not tickers:
-        raise RuntimeError("Unable to load Russell 1000 ticker list")
-
-    pd.DataFrame({"ticker": tickers, "source": source}).to_csv(RUSSELL_CACHE, index=False)
+    pd.DataFrame({"ticker": tickers, "source": "ishares"}).to_csv(RUSSELL_CACHE, index=False)
     return tickers
 
 
