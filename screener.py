@@ -12,17 +12,34 @@ from strategy import SignalResult, evaluate_ticker
 LOGGER = logging.getLogger(__name__)
 
 
+def _diagnostic(message: str) -> None:
+    """Emit a diagnostic message to the console immediately."""
+    print(message, flush=True)
+
+
 def scan_ticker(ticker: str, threshold: float = 0.1) -> SignalResult | None:
     """Scan a single ticker and return it only when it has a current signal."""
+    _diagnostic(f"Fetching {ticker}...")
     try:
         bars = load_ohlcv(ticker)
+        if bars is None or bars.empty:
+            _diagnostic(f"Fetching {ticker} failed: no OHLCV data returned.")
+            return None
+        _diagnostic(f"Fetching {ticker} success.")
+
         earnings_dates = load_earnings_dates(ticker, bars)
         result = evaluate_ticker(ticker, bars, earnings_dates, threshold=threshold)
     except Exception as exc:  # noqa: BLE001 - continue scanning other tickers
+        _diagnostic(f"Fetching {ticker} failed: {exc}")
         LOGGER.warning("Failed to scan %s: %s", ticker, exc)
         return None
 
-    if result and (result.near_earnings or result.near_yearly):
+    if result is None:
+        _diagnostic(f"Proximity detection failed for {ticker}: no evaluable proximity result.")
+        return None
+
+    _diagnostic(f"Proximity detection success for {ticker}.")
+    if result.near_earnings or result.near_yearly:
         return result
     return None
 
@@ -33,7 +50,14 @@ def run_scan(
     tickers: Iterable[str] | None = None,
 ) -> list[dict[str, object]]:
     """Run the Russell 1000 screener concurrently and return ranked results."""
-    ticker_list = list(tickers) if tickers is not None else load_russell1000_tickers()
+    _diagnostic("Loading ticker list...")
+    try:
+        ticker_list = list(tickers) if tickers is not None else load_russell1000_tickers()
+    except Exception as exc:  # noqa: BLE001 - surface ticker-list load failures clearly
+        _diagnostic(f"Loading ticker list failed: {exc}")
+        raise
+    _diagnostic(f"Loading ticker list success: {len(ticker_list)} tickers ready.")
+    _diagnostic("Running proximity list...")
     results: list[SignalResult] = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -43,6 +67,7 @@ def run_scan(
             try:
                 result = future.result()
             except Exception as exc:  # noqa: BLE001 - defensive guard
+                _diagnostic(f"Proximity detection failed for {ticker}: {exc}")
                 LOGGER.warning("Unhandled scan failure for %s: %s", ticker, exc)
                 continue
             if result is not None:
@@ -55,4 +80,5 @@ def run_scan(
             item.ticker,
         )
     )
+    _diagnostic(f"Proximity list success: {len(results)} matching tickers found.")
     return [result.as_dict() for result in results]
