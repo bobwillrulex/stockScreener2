@@ -13,6 +13,7 @@ class ScanRouteTests(unittest.TestCase):
             "run_id": 1,
             "previous_database_found": True,
             "new_tickers": ["NVDA"],
+            "new_results": [{"ticker": "NVDA"}],
             "message": "Found 1 new ticker(s) compared with the previous scan.",
         }
 
@@ -36,6 +37,7 @@ class ScanRouteTests(unittest.TestCase):
                     "run_id": 1,
                     "previous_database_found": True,
                     "new_tickers": ["NVDA"],
+                    "new_results": [{"ticker": "NVDA"}],
                     "message": "Found 1 new ticker(s) compared with the previous scan.",
                 },
             },

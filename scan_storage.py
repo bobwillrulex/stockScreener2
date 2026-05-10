@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ class PersistedScan:
     run_id: int
     previous_database_found: bool
     new_tickers: list[str]
+    new_results: list[dict[str, Any]]
 
     @property
     def message(self) -> str:
@@ -39,6 +41,7 @@ class PersistedScan:
             "run_id": self.run_id,
             "previous_database_found": self.previous_database_found,
             "new_tickers": self.new_tickers,
+            "new_results": self.new_results,
             "message": self.message,
         }
 
@@ -82,6 +85,28 @@ def _initialize(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_scan_results_run_ticker ON scan_results (run_id, ticker)"
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scan_new_tickers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            ticker TEXT NOT NULL,
+            company_name TEXT,
+            market_cap INTEGER,
+            near_earnings INTEGER NOT NULL,
+            near_yearly INTEGER NOT NULL,
+            min_distance_earnings REAL,
+            min_distance_yearly REAL,
+            distance_score REAL,
+            last_price REAL,
+            payload_json TEXT NOT NULL,
+            FOREIGN KEY (run_id) REFERENCES scan_runs (id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scan_new_tickers_run_ticker ON scan_new_tickers (run_id, ticker)"
+    )
 
 
 def _latest_run_id(connection: sqlite3.Connection) -> int | None:
@@ -102,10 +127,18 @@ def _normalize_ticker(value: object) -> str:
     return str(value or "").strip().upper()
 
 
-def _insert_result(connection: sqlite3.Connection, run_id: int, row: dict[str, Any]) -> None:
+def _insert_result(
+    connection: sqlite3.Connection,
+    run_id: int,
+    row: dict[str, Any],
+    table_name: str = "scan_results",
+) -> None:
+    if table_name not in {"scan_results", "scan_new_tickers"}:
+        raise ValueError(f"Unsupported scan storage table: {table_name}")
+
     connection.execute(
-        """
-        INSERT INTO scan_results (
+        f"""
+        INSERT INTO {table_name} (
             run_id,
             ticker,
             company_name,
@@ -142,7 +175,7 @@ def persist_scan_results(
     """Store scan results and identify tickers absent from the previous stored scan."""
     normalized_results = [dict(row, ticker=_normalize_ticker(row.get("ticker"))) for row in results]
 
-    with _connect(database_path) as connection:
+    with closing(_connect(database_path)) as connection:
         _initialize(connection)
         previous_run_id = _latest_run_id(connection)
         previous_tickers = _tickers_for_run(connection, previous_run_id) if previous_run_id else set()
@@ -155,15 +188,28 @@ def persist_scan_results(
             if previous_run_id is not None
             else []
         )
+        new_ticker_set = set(new_tickers)
+        new_results: list[dict[str, Any]] = []
+        seen_new_tickers: set[str] = set()
+        for row in normalized_results:
+            ticker = row["ticker"]
+            if ticker in new_ticker_set and ticker not in seen_new_tickers:
+                new_results.append(row)
+                seen_new_tickers.add(ticker)
 
         cursor = connection.execute(
             "INSERT INTO scan_runs (created_at, result_count) VALUES (?, ?)",
             (datetime.now(UTC).isoformat(timespec="seconds"), len(current_ticker_set)),
         )
         run_id = int(cursor.lastrowid)
+        stored_new_tickers: set[str] = set()
         for row in normalized_results:
-            if row["ticker"]:
+            ticker = row["ticker"]
+            if ticker:
                 _insert_result(connection, run_id, row)
+                if ticker in new_ticker_set and ticker not in stored_new_tickers:
+                    _insert_result(connection, run_id, row, "scan_new_tickers")
+                    stored_new_tickers.add(ticker)
         connection.commit()
 
     return PersistedScan(
@@ -171,4 +217,5 @@ def persist_scan_results(
         run_id=run_id,
         previous_database_found=previous_run_id is not None,
         new_tickers=new_tickers,
+        new_results=new_results,
     )
