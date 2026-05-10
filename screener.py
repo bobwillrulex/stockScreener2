@@ -29,7 +29,7 @@ def scan_ticker(ticker: str, threshold: float = 0.1) -> SignalResult | None:
 
 def run_scan(
     threshold: float = 0.1,
-    max_workers: int = 12,
+    max_workers: int = 4,
     tickers: Iterable[str] | None = None,
 ) -> list[dict[str, object]]:
     """Run the Russell 1000 screener concurrently and return ranked results."""
