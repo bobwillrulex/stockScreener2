@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import re
@@ -29,10 +30,12 @@ YFINANCE_EARNINGS_ENABLED = os.getenv("YFINANCE_EARNINGS_ENABLED", "false").lowe
 }
 _LAST_YFINANCE_REQUEST_AT = 0.0
 _YFINANCE_REQUEST_LOCK = threading.Lock()
+_METADATA_CACHE_LOCK = threading.Lock()
 
 BASE_DIR = Path(__file__).resolve().parent
 RUSSELL_CACHE = BASE_DIR / "russell1000.csv"
 DATA_CACHE_DIR = BASE_DIR / "data_cache"
+METADATA_CACHE = DATA_CACHE_DIR / "ticker_metadata.json"
 TRUSTED_RUSSELL_SOURCES = {"ishares"}
 RUSSELL_MIN_TICKERS = 900
 TICKER_PATTERN = re.compile(r"^[A-Z]{1,5}(?:-[A-Z]{1,2})?$")
@@ -134,6 +137,100 @@ def load_russell1000_tickers(force_refresh: bool = False) -> list[str]:
 
     pd.DataFrame({"ticker": tickers, "source": "ishares"}).to_csv(RUSSELL_CACHE, index=False)
     return tickers
+
+
+def _read_metadata_cache() -> dict[str, dict[str, object]]:
+    if not METADATA_CACHE.exists():
+        return {}
+    try:
+        raw = json.loads(METADATA_CACHE.read_text())
+    except Exception as exc:  # noqa: BLE001 - bad cache should not break scans
+        LOGGER.warning("Unable to read ticker metadata cache: %s", exc)
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(ticker).upper(): metadata
+        for ticker, metadata in raw.items()
+        if isinstance(metadata, dict)
+    }
+
+
+def _write_metadata_cache(cache: dict[str, dict[str, object]]) -> None:
+    DATA_CACHE_DIR.mkdir(exist_ok=True)
+    try:
+        METADATA_CACHE.write_text(json.dumps(cache, indent=2, sort_keys=True))
+    except Exception as exc:  # noqa: BLE001 - cache failures are non-fatal
+        LOGGER.warning("Unable to write ticker metadata cache: %s", exc)
+
+
+def _clean_market_cap(value: object) -> int | None:
+    if value is None or pd.isna(value):
+        return None
+    try:
+        market_cap = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return market_cap if market_cap > 0 else None
+
+
+def _clean_company_name(value: object) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    name = str(value).strip()
+    return name or None
+
+
+def _metadata_from_yfinance(ticker: str) -> dict[str, object]:
+    symbol = ticker.replace(".", "-")
+    quote = yf.Ticker(symbol)
+
+    company_name = None
+    market_cap = None
+
+    try:
+        info = _call_yfinance_with_delay(lambda: quote.get_info() or {})
+    except Exception as exc:  # noqa: BLE001 - metadata should not prevent scanning
+        LOGGER.info("Unable to load company profile for %s: %s", ticker, exc)
+        info = {}
+
+    if isinstance(info, dict):
+        company_name = _clean_company_name(info.get("longName") or info.get("shortName"))
+        market_cap = _clean_market_cap(info.get("marketCap"))
+
+    if market_cap is None:
+        try:
+            fast_info = _call_yfinance_with_delay(lambda: quote.fast_info)
+            market_cap = _clean_market_cap(fast_info.get("market_cap"))
+        except Exception as exc:  # noqa: BLE001 - fast_info can be unavailable per symbol
+            LOGGER.info("Unable to load fast metadata for %s: %s", ticker, exc)
+
+    return {"company_name": company_name, "market_cap": market_cap}
+
+
+def load_ticker_metadata(ticker: str, max_age_hours: int = 24 * 7) -> dict[str, object]:
+    """Load display metadata for a ticker, caching company name and market cap."""
+    normalized_ticker = ticker.strip().upper().replace(".", "-")
+
+    with _METADATA_CACHE_LOCK:
+        cache = _read_metadata_cache()
+        cached = cache.get(normalized_ticker)
+        now = datetime.now()
+
+        if cached is not None:
+            fetched_at = pd.to_datetime(cached.get("fetched_at"), errors="coerce")
+            if pd.notna(fetched_at) and now - fetched_at.to_pydatetime() <= timedelta(
+                hours=max_age_hours
+            ):
+                return {
+                    "company_name": _clean_company_name(cached.get("company_name")),
+                    "market_cap": _clean_market_cap(cached.get("market_cap")),
+                }
+
+        metadata = _metadata_from_yfinance(normalized_ticker)
+        cache[normalized_ticker] = {**metadata, "fetched_at": now.isoformat()}
+        _write_metadata_cache(cache)
+        return metadata
 
 
 def _flatten_yfinance_columns(frame: pd.DataFrame) -> pd.DataFrame:

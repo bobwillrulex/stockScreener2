@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from typing import Iterable
 
-from data_loader import load_earnings_dates, load_ohlcv, load_russell1000_tickers
+from data_loader import (
+    load_earnings_dates,
+    load_ohlcv,
+    load_russell1000_tickers,
+    load_ticker_metadata,
+)
 from strategy import SignalResult, evaluate_ticker
 
 LOGGER = logging.getLogger(__name__)
@@ -40,7 +46,17 @@ def scan_ticker(ticker: str, threshold: float = 0.1) -> SignalResult | None:
 
     _diagnostic(f"Proximity detection success for {ticker}.")
     if result.near_earnings or result.near_yearly:
-        return result
+        try:
+            metadata = load_ticker_metadata(ticker)
+        except Exception as exc:  # noqa: BLE001 - metadata is display-only
+            _diagnostic(f"Metadata lookup failed for {ticker}: {exc}")
+            LOGGER.warning("Failed to load metadata for %s: %s", ticker, exc)
+            metadata = {}
+        return replace(
+            result,
+            company_name=metadata.get("company_name"),
+            market_cap=metadata.get("market_cap"),
+        )
     return None
 
 
@@ -75,8 +91,8 @@ def run_scan(
 
     results.sort(
         key=lambda item: (
-            item.distance_score is None,
-            item.distance_score if item.distance_score is not None else float("inf"),
+            item.market_cap is None,
+            -(item.market_cap or 0),
             item.ticker,
         )
     )

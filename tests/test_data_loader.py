@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -58,6 +60,65 @@ CASH,Cash,Other
 
         self.assertIn("ishares", rewritten)
         self.assertNotIn("wikipedia", rewritten)
+
+    def test_load_ticker_metadata_uses_fresh_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "ticker_metadata.json"
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "AAPL": {
+                            "company_name": "Apple Inc.",
+                            "market_cap": 2500000000000,
+                            "fetched_at": datetime.now().isoformat(),
+                        }
+                    }
+                )
+            )
+
+            with patch.object(data_loader, "METADATA_CACHE", cache_path), patch.object(
+                data_loader, "_metadata_from_yfinance"
+            ) as fetch_metadata:
+                metadata = data_loader.load_ticker_metadata("aapl")
+
+        self.assertEqual(
+            metadata,
+            {"company_name": "Apple Inc.", "market_cap": 2500000000000},
+        )
+        fetch_metadata.assert_not_called()
+
+    def test_load_ticker_metadata_refreshes_stale_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "ticker_metadata.json"
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "MSFT": {
+                            "company_name": "Old Name",
+                            "market_cap": 1,
+                            "fetched_at": "2000-01-01T00:00:00",
+                        }
+                    }
+                )
+            )
+
+            with patch.object(data_loader, "METADATA_CACHE", cache_path), patch.object(
+                data_loader,
+                "_metadata_from_yfinance",
+                return_value={
+                    "company_name": "Microsoft Corporation",
+                    "market_cap": 3000000000000,
+                },
+            ) as fetch_metadata:
+                metadata = data_loader.load_ticker_metadata("MSFT")
+                rewritten = json.loads(cache_path.read_text())
+
+        self.assertEqual(
+            metadata,
+            {"company_name": "Microsoft Corporation", "market_cap": 3000000000000},
+        )
+        self.assertEqual(rewritten["MSFT"]["company_name"], "Microsoft Corporation")
+        fetch_metadata.assert_called_once_with("MSFT")
 
 
 if __name__ == "__main__":
