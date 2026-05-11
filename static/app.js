@@ -9,6 +9,8 @@ const newTickerCount = document.getElementById('new-ticker-count');
 const tableTitle = document.getElementById('table-title');
 const viewButtons = document.querySelectorAll('[data-result-view]');
 const sortButtons = document.querySelectorAll('[data-sort-key]');
+const lastUpdated = document.getElementById('last-updated');
+const schedulerStatus = document.getElementById('scheduler-status');
 
 const columnTypes = {
   ticker: 'text',
@@ -31,6 +33,40 @@ let currentResults = [];
 let currentNewTickerResults = [];
 let currentView = 'signals';
 let currentSort = { key: 'market_cap', direction: 'desc' };
+
+function formatDateTime(value) {
+  if (!value) {
+    return 'Never';
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleString(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+}
+
+function renderLastUpdated(scanDatabase) {
+  const updatedAt = scanDatabase?.created_at;
+  lastUpdated.textContent = `Last updated: ${formatDateTime(updatedAt)}`;
+}
+
+function renderSchedulerStatus(status) {
+  if (!status) {
+    schedulerStatus.textContent = 'Scheduler status unavailable.';
+    return;
+  }
+
+  const nextScan = status.next_scheduled_scan_at
+    ? ` Next automated scan: ${formatDateTime(status.next_scheduled_scan_at)}.`
+    : '';
+  const running = status.is_running ? 'A scan is currently running.' : 'No scan is currently running.';
+  schedulerStatus.textContent = `${running}${nextScan}`;
+}
 
 function formatNumber(value, digits = 4) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
@@ -184,6 +220,7 @@ function renderRows(results = activeResults()) {
 function renderScanDatabase(scanDatabase) {
   if (!scanDatabase) {
     currentNewTickerResults = [];
+    renderLastUpdated(null);
     databaseStatus.textContent = 'Scan database status was not returned.';
     newTickerCount.textContent = '0 new tickers';
     renderRows();
@@ -193,6 +230,7 @@ function renderScanDatabase(scanDatabase) {
   currentNewTickerResults = scanDatabase.new_results || [];
   const tickers = scanDatabase.new_tickers || [];
   databaseStatus.textContent = scanDatabase.message || 'Scan database updated.';
+  renderLastUpdated(scanDatabase);
   newTickerCount.textContent = `${tickers.length} new ticker${tickers.length === 1 ? '' : 's'}`;
   renderRows();
 }
@@ -264,10 +302,33 @@ async function runScan() {
     resultsBody.innerHTML = `<tr><td colspan="9" class="text-danger text-center py-4">${escapeHtml(error.message)}</td></tr>`;
     databaseStatus.textContent = 'Scan database was not updated.';
     newTickerCount.textContent = '0 new tickers';
+    renderLastUpdated(null);
     statusText.textContent = 'Scan failed.';
   } finally {
     spinner.classList.add('d-none');
     runButton.disabled = false;
+  }
+}
+
+async function refreshScanStatus() {
+  try {
+    const response = await fetch('/scan/status');
+    if (!response.ok) {
+      throw new Error(`Status failed with HTTP ${response.status}`);
+    }
+    const status = await response.json();
+    renderSchedulerStatus(status);
+    if (status.last_scan_database) {
+      renderLastUpdated(status.last_scan_database);
+      databaseStatus.textContent = status.last_scan_database.message || 'Scan database updated.';
+      const tickers = status.last_scan_database.new_tickers || [];
+      newTickerCount.textContent = `${tickers.length} new ticker${tickers.length === 1 ? '' : 's'}`;
+    }
+    if (status.last_error) {
+      statusText.textContent = `Last scan failed: ${status.last_error}`;
+    }
+  } catch (error) {
+    schedulerStatus.textContent = 'Scheduler status unavailable.';
   }
 }
 
@@ -277,3 +338,5 @@ resultsBody.addEventListener('click', handleResultsClick);
 resultsBody.addEventListener('keydown', handleResultsKeydown);
 runButton.addEventListener('click', runScan);
 renderRows();
+refreshScanStatus();
+setInterval(refreshScanStatus, 60000);

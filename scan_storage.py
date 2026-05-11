@@ -21,6 +21,8 @@ class PersistedScan:
 
     database_path: Path
     run_id: int
+    created_at: str
+    result_count: int
     previous_database_found: bool
     new_tickers: list[str]
     new_results: list[dict[str, Any]]
@@ -39,6 +41,8 @@ class PersistedScan:
         return {
             "database_path": str(self.database_path),
             "run_id": self.run_id,
+            "created_at": self.created_at,
+            "result_count": self.result_count,
             "previous_database_found": self.previous_database_found,
             "new_tickers": self.new_tickers,
             "new_results": self.new_results,
@@ -197,9 +201,10 @@ def persist_scan_results(
                 new_results.append(row)
                 seen_new_tickers.add(ticker)
 
+        created_at = datetime.now(UTC).isoformat(timespec="seconds")
         cursor = connection.execute(
             "INSERT INTO scan_runs (created_at, result_count) VALUES (?, ?)",
-            (datetime.now(UTC).isoformat(timespec="seconds"), len(current_ticker_set)),
+            (created_at, len(current_ticker_set)),
         )
         run_id = int(cursor.lastrowid)
         stored_new_tickers: set[str] = set()
@@ -215,7 +220,46 @@ def persist_scan_results(
     return PersistedScan(
         database_path=database_path,
         run_id=run_id,
+        created_at=created_at,
+        result_count=len(current_ticker_set),
         previous_database_found=previous_run_id is not None,
         new_tickers=new_tickers,
         new_results=new_results,
     )
+
+
+def latest_scan_summary(database_path: Path = SCAN_DATABASE) -> dict[str, object] | None:
+    """Return a JSON-serializable summary of the most recent stored scan."""
+    if not database_path.exists():
+        return None
+
+    with closing(_connect(database_path)) as connection:
+        _initialize(connection)
+        run = connection.execute(
+            "SELECT id, created_at, result_count FROM scan_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if run is None:
+            return None
+
+        new_tickers = [
+            str(row["ticker"])
+            for row in connection.execute(
+                "SELECT ticker FROM scan_new_tickers WHERE run_id = ? ORDER BY id",
+                (run["id"],),
+            ).fetchall()
+        ]
+
+    message = (
+        f"Found {len(new_tickers)} new ticker(s) compared with the previous scan."
+        if new_tickers
+        else "No new tickers found compared with the previous scan."
+    )
+    return {
+        "database_path": str(database_path),
+        "run_id": int(run["id"]),
+        "created_at": str(run["created_at"]),
+        "result_count": int(run["result_count"]),
+        "new_tickers": new_tickers,
+        "new_results": [],
+        "message": message,
+    }
