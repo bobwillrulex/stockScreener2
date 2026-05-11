@@ -68,6 +68,10 @@ function boolBadge(value) {
   return `<span class="badge ${classes}">${label}</span>`;
 }
 
+function tradingViewUrlForTicker(ticker) {
+  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(String(ticker).trim().toUpperCase())}`;
+}
+
 function normalizeSortValue(row, key) {
   const value = row[key];
   if (value === null || value === undefined || value === '') {
@@ -157,9 +161,13 @@ function renderRows(results = activeResults()) {
     return;
   }
 
-  resultsBody.innerHTML = sortedResults.map((row) => `
-    <tr>
-      <td class="fw-semibold">${escapeHtml(row.ticker)}</td>
+  resultsBody.innerHTML = sortedResults.map((row) => {
+    const ticker = String(row.ticker || '').trim();
+    const tradingViewUrl = tradingViewUrlForTicker(ticker);
+
+    return `
+    <tr class="ticker-row" tabindex="0" role="link" data-trading-view-url="${tradingViewUrl}" aria-label="Open ${escapeHtml(ticker)} on TradingView" title="Open ${escapeHtml(ticker)} on TradingView">
+      <td class="fw-semibold">${escapeHtml(ticker)}</td>
       <td>${row.company_name ? escapeHtml(row.company_name) : '—'}</td>
       <td>${formatMarketCap(row.market_cap)}</td>
       <td>${boolBadge(row.near_earnings)}</td>
@@ -169,7 +177,8 @@ function renderRows(results = activeResults()) {
       <td>${formatNumber(row.min_distance_yearly)}</td>
       <td>$${formatNumber(row.last_price, 2)}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function renderScanDatabase(scanDatabase) {
@@ -200,6 +209,32 @@ function handleSortClick(event) {
 function handleViewClick(event) {
   currentView = event.currentTarget.dataset.resultView;
   renderRows();
+}
+
+function openTradingViewRow(row) {
+  const tradingViewUrl = row.dataset.tradingViewUrl;
+  if (tradingViewUrl) {
+    window.location.href = tradingViewUrl;
+  }
+}
+
+function handleResultsClick(event) {
+  const row = event.target.closest('.ticker-row');
+  if (row) {
+    openTradingViewRow(row);
+  }
+}
+
+function handleResultsKeydown(event) {
+  if (event.key !== 'Enter' && event.key !== ' ') {
+    return;
+  }
+
+  const row = event.target.closest('.ticker-row');
+  if (row) {
+    event.preventDefault();
+    openTradingViewRow(row);
+  }
 }
 
 async function runScan() {
@@ -238,5 +273,7 @@ async function runScan() {
 
 sortButtons.forEach((button) => button.addEventListener('click', handleSortClick));
 viewButtons.forEach((button) => button.addEventListener('click', handleViewClick));
+resultsBody.addEventListener('click', handleResultsClick);
+resultsBody.addEventListener('keydown', handleResultsKeydown);
 runButton.addEventListener('click', runScan);
 renderRows();
