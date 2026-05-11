@@ -10,6 +10,7 @@ A Flask dashboard that scans Russell 1000 constituents for stocks currently trad
 - Earnings-anchored and calendar-year anchored VWAP calculations using HLC3 and cumulative volume weighting.
 - Generated quarterly earnings anchors by default to avoid rate-limited yfinance earnings calls during broad scans.
 - Concurrent ticker processing with `ThreadPoolExecutor`.
+- Optional daemon scheduler runs scans at completed NYSE 4-hour candles (1:30 PM and 4:00 PM Eastern) on trading days only.
 
 ## Setup
 
@@ -20,7 +21,7 @@ python -m pip install -r requirements.txt
 python app.py
 ```
 
-Open <http://localhost:5000> and click **Run Scan**.
+Open <http://localhost:5000> and click **Run Scan**. When started with `python app.py`, the bot also starts an automated scheduler by default and scans after completed NYSE 4-hour candles at 1:30 PM and 4:00 PM Eastern, skipping weekends and standard NYSE full-day holidays. Set `AUTO_SCAN_ENABLED=false` to disable automated scans, or `SCAN_THRESHOLD` to change the scheduled scan threshold.
 
 By default, scans use generated quarterly earnings anchors instead of yfinance
 earnings dates. This keeps a Russell 1000 run from making an extra provider call
@@ -36,7 +37,7 @@ curl -X POST http://localhost:5000/scan \
   -d '{"threshold": 0.1, "max_workers": 4}'
 ```
 
-The response shape is:
+The response includes the scan results and persisted scan metadata, including the last update timestamp:
 
 ```json
 {
@@ -50,7 +51,12 @@ The response shape is:
       "distance_score": 0.04,
       "last_price": 123.45
     }
-  ]
+  ],
+  "scan_database": {
+    "created_at": "2026-05-11T20:00:00+00:00",
+    "result_count": 1,
+    "new_tickers": []
+  }
 }
 ```
 
